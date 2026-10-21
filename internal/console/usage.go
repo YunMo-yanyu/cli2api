@@ -1,0 +1,81 @@
+package console
+
+import (
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/caigee-cmd/cli2api/internal/accounts"
+)
+
+// exportWindowHours is the widest range the cost panel can ask for. Request logs
+// are pruned after 7 days / 20k rows, so a longer window would silently return
+// partial data; 168h makes that ceiling explicit instead of misleading.
+const exportWindowHours = 24 * 7
+
+func (h *Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(r.URL.Path, "/")
+	switch path {
+	case "api/usage/pricing":
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
+			return
+		}
+		catalog := make([]accounts.ModelPrice, 0)
+		for _, model := range accounts.ModelPriceCatalog() {
+			if model.Alias {
+				continue
+			}
+			catalog = append(catalog, model)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"currency": "CNY",
+			"models":   catalog,
+			"note":     "官方列表价（DeepSeek）。高峰/闲时按北京时间；闲时为高峰一半。请求日志仅保留约 7 天。",
+		})
+	case "api/usage/cost":
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET only")
+			return
+		}
+		h.handleUsageCost(w, r)
+	default:
+		writeErr(w, http.StatusNotFound, "not_found", "unknown usage endpoint")
+	}
+}
+
+func (h *Handler) handleUsageCost(w http.ResponseWriter, r *http.Request) {
+	if h.Recorder == nil {
+		writeErr(w, http.StatusServiceUnavailable, "logs_unavailable", "request logs unavailable")
+		return
+	}
+	now := time.Now().UTC()
+	to := ParseQueryTime(r.URL.Query().Get("to"), true)
+	if to == nil {
+		to = &now
+	}
+	from := ParseQueryTime(r.URL.Query().Get("from"), false)
+	if from == nil {
+		earliest := to.Add(-exportWindowHours * time.Hour)
+		from = &earliest
+	}
+	// Clamp to the retention ceiling so a wide custom range cannot imply
+	// full coverage of data the pruner already dropped.
+	if floor := to.Add(-exportWindowHours * time.Hour); from.Before(floor) {
+		from = &floor
+	}
+	if !to.After(*from) {
+		start := to.Add(-24 * time.Hour)
+		from = &start
+	}
+	breakdown, err := h.Recorder.CostBreakdown(r.Context(), *from, *to)
+	if err != nil {
+		if err.Error() == "request logs unavailable" {
+			writeErr(w, http.StatusServiceUnavailable, "logs_unavailable", err.Error())
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "cost_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, breakdown)
+}

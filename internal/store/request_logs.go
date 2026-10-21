@@ -860,3 +860,87 @@ func nullIntPtr(value sql.NullInt64) *int {
 	converted := int(value.Int64)
 	return &converted
 }
+
+// SummarizeModelCosts aggregates token usage per model per whole UTC hour for the
+// priced models, so the cost layer can bill peak/off-peak exactly. Service rows
+// without any usage arithmetic are billed by their recorded usage; rows with a
+// NULL prompt_tokens (failed before usage was known) contribute nothing.
+func (s *Store) SummarizeModelCosts(ctx context.Context, from, to time.Time) ([]accounts.CostUsageRow, error) {
+	if from.IsZero() {
+		from = time.Now().UTC().Add(-24 * time.Hour)
+	}
+	if to.IsZero() {
+		to = time.Now().UTC()
+	}
+	from = from.UTC()
+	to = to.UTC()
+	if !to.After(from) {
+		to = from.Add(time.Hour)
+	}
+	ids := accounts.PricedModelIDs()
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	// Arg order must match the SQL placeholder order: the two window bounds come
+	// first (top of the WHERE), then the four IN clauses (requested/mapped ×
+	// raw/normalized), each repeating the id list.
+	args := make([]any, 0, len(ids)*4+2)
+	args = append(args, from.Format("2006-01-02T15:04:05"), to.Format("2006-01-02T15:04:05"))
+	for clause := 0; clause < 4; clause++ {
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+
+	// The model match is normalized in SQL: lower-case, drop a provider prefix,
+	// drop a trailing -sg/_sg. That keeps WorkBuddy's "workbuddy/deepseek-v4.1-flash"
+	// and "-sg" aliases on the same price row without enumerating every variant.
+	inList := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+  COALESCE(NULLIF(requested_model, ''), mapped_model, '') AS model_id,
+  substr(created_at, 1, 13) AS hour_key,
+  COALESCE(SUM(CASE WHEN prompt_tokens IS NOT NULL OR completion_tokens IS NOT NULL THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0),
+  COALESCE(SUM(CASE WHEN prompt_tokens IS NULL THEN 0 ELSE MAX(prompt_tokens - COALESCE(cache_read_tokens, 0), 0) END), 0),
+  COALESCE(SUM(COALESCE(completion_tokens, 0)), 0)
+FROM request_logs
+WHERE substr(created_at, 1, 19) >= ? AND substr(created_at, 1, 19) <= ?
+  AND (
+    lower(requested_model) IN (`+inList+`)
+    OR lower(mapped_model) IN (`+inList+`)
+    OR lower(replace(replace(replace(requested_model, '-sg', ''), '_sg', ''), 'workbuddy/', '')) IN (`+inList+`)
+    OR lower(replace(replace(replace(mapped_model, '-sg', ''), '_sg', ''), 'workbuddy/', '')) IN (`+inList+`)
+  )
+GROUP BY model_id, hour_key`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("summarize model costs: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]accounts.CostUsageRow, 0, 128)
+	for rows.Next() {
+		var (
+			model    string
+			hourKey  string
+			requests int64
+			hit      int64
+			miss     int64
+			output   int64
+		)
+		if err := rows.Scan(&model, &hourKey, &requests, &hit, &miss, &output); err != nil {
+			return nil, fmt.Errorf("scan model cost row: %w", err)
+		}
+		hour, err := time.Parse("2006-01-02T15", hourKey)
+		if err != nil {
+			continue
+		}
+		out = append(out, accounts.CostUsageRow{
+			Model:     model,
+			HourStart: hour.UTC(),
+			Requests:  requests,
+			Usage:     accounts.TokenUsage{CacheHit: hit, CacheMiss: miss, Output: output},
+		})
+	}
+	return out, rows.Err()
+}
