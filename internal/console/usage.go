@@ -28,10 +28,11 @@ func (h *Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 			}
 			catalog = append(catalog, model)
 		}
+		// No display copy here: the console renders localized text from its own
+		// i18n messages, so the API stays language-neutral.
 		writeJSON(w, http.StatusOK, map[string]any{
 			"currency": "CNY",
 			"models":   catalog,
-			"note":     "官方列表价（DeepSeek）。高峰/闲时按北京时间；闲时为高峰一半。请求日志仅保留约 7 天。",
 		})
 	case "api/usage/cost":
 		if r.Method != http.MethodGet {

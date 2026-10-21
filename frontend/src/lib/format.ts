@@ -67,3 +67,10 @@ export function formatUnitPrice(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '—'
   return `¥${Number(value.toFixed(4))}`
 }
+
+/** Subscription quota spent, in the provider's own credit unit. */
+export function formatCredits(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '—'
+  if (value >= 10_000) return formatCompact(value)
+  return value.toLocaleString('zh-CN', { minimumFractionDigits: value < 100 ? 2 : 0, maximumFractionDigits: 2 })
+}

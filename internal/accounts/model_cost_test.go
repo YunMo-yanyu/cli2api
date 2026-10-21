@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,10 +85,20 @@ func TestBuildCostBreakdownSplitsPeakAndOffPeak(t *testing.T) {
 	to := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
 	got := BuildCostBreakdown(rows, from, to, true)
 
-	if len(got.Models) != 1 {
-		t.Fatalf("models = %d, want 1 priced model", len(got.Models))
+	// Every model that carried usage is reported; glm-5.3-flash has no list
+	// price, so it appears with Priced=false and zero cost while still
+	// contributing its tokens.
+	if len(got.Models) != 2 {
+		t.Fatalf("models = %d, want 2 (1 priced + 1 unpriced)", len(got.Models))
 	}
-	m := got.Models[0]
+	var m ModelCost
+	for _, candidate := range got.Models {
+		if candidate.Priced {
+			m = candidate
+		} else if !strings.Contains(candidate.ID, "glm") {
+			t.Fatalf("unpriced model = %q, want glm-5.3-flash", candidate.ID)
+		}
+	}
 	if m.Requests != 5 {
 		t.Fatalf("requests = %d, want 5", m.Requests)
 	}
@@ -112,5 +123,55 @@ func TestBuildCostBreakdownSplitsPeakAndOffPeak(t *testing.T) {
 	}
 	if math.Abs(got.Series[0].PerModel["deepseek-v4.1-flash"]-(wantPeak+wantOff)) > 1e-9 {
 		t.Fatalf("series bucket = %v, want %v", got.Series[0].PerModel["deepseek-v4.1-flash"], wantPeak+wantOff)
+	}
+}
+
+func TestBuildCostBreakdownReportsCreditsForUnpricedModels(t *testing.T) {
+	// Subscription accounts consume quota even for models with no official list
+	// price, so those rows must still surface tokens and credits with zero cost.
+	peakHour := time.Date(2026, 10, 12, 2, 0, 0, 0, time.UTC)
+	rows := []CostUsageRow{
+		{Model: "deepseek-v4.1-flash", HourStart: peakHour, Requests: 2,
+			Usage: TokenUsage{CacheHit: 1_000_000, Output: 1_000_000}, Credits: 1.5},
+		{Model: "glm-5.3-flash", HourStart: peakHour, Requests: 4,
+			Usage: TokenUsage{CacheMiss: 2_000_000, Output: 3_000_000}, Credits: 7.25},
+	}
+	from := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	got := BuildCostBreakdown(rows, from, to, true)
+
+	var priced, unpriced *ModelCost
+	for i := range got.Models {
+		if got.Models[i].Priced {
+			priced = &got.Models[i]
+		} else {
+			unpriced = &got.Models[i]
+		}
+	}
+	if priced == nil || unpriced == nil {
+		t.Fatalf("models = %d, want one priced and one unpriced", len(got.Models))
+	}
+	if unpriced.Credits != 7.25 {
+		t.Fatalf("unpriced credits = %v, want 7.25", unpriced.Credits)
+	}
+	if unpriced.TotalTokens != 5_000_000 {
+		t.Fatalf("unpriced tokens = %d, want 5000000", unpriced.TotalTokens)
+	}
+	if unpriced.Cost != 0 {
+		t.Fatalf("unpriced cost = %v, want 0", unpriced.Cost)
+	}
+	if priced.Credits != 1.5 {
+		t.Fatalf("priced credits = %v, want 1.5", priced.Credits)
+	}
+	// Totals keep both kinds of cost unit so the console can show quota consumed
+	// across every provider next to the DeepSeek-equivalent money.
+	if got.Totals.Credits != 8.75 {
+		t.Fatalf("total credits = %v, want 8.75", got.Totals.Credits)
+	}
+	if got.Totals.Requests != 6 {
+		t.Fatalf("total requests = %d, want 6", got.Totals.Requests)
+	}
+	if len(got.Series) != 1 || got.Series[0].Credits != 8.75 {
+		t.Fatalf("series credits = %+v, want one point with 8.75", got.Series)
 	}
 }

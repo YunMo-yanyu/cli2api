@@ -479,10 +479,26 @@ func TestSummarizeModelCostsAggregatesPricedModels(t *testing.T) {
 		t.Fatal(err)
 	}
 	breakdown := accounts.BuildCostBreakdown(rows, from, to, true)
-	if len(breakdown.Models) != 1 {
-		t.Fatalf("priced models = %d, want 1 (glm excluded)", len(breakdown.Models))
+	// Model rows now include unpriced models so the console can still report
+	// their tokens and quota; only the priced one carries the monetary columns.
+	if len(breakdown.Models) != 2 {
+		t.Fatalf("models = %d, want 2 (priced + unpriced glm)", len(breakdown.Models))
 	}
-	m := breakdown.Models[0]
+	var m accounts.ModelCost
+	var unpriced accounts.ModelCost
+	for _, candidate := range breakdown.Models {
+		if candidate.Priced {
+			m = candidate
+		} else {
+			unpriced = candidate
+		}
+	}
+	if unpriced.ID != "glm-5.3-flash" {
+		t.Fatalf("unpriced id = %q, want glm-5.3-flash", unpriced.ID)
+	}
+	if unpriced.Output != 10 || unpriced.Cost != 0 {
+		t.Fatalf("unpriced output/cost = %d/%v, want 10/0", unpriced.Output, unpriced.Cost)
+	}
 	// Peak rows: hit 400k+500k=900k, miss (600k+0)=600k, output 1M.
 	// Off row: hit 0, miss 1M, output 1M.
 	if m.CacheHit != 900_000 || m.CacheMiss != 1_600_000 || m.Output != 2_000_000 {

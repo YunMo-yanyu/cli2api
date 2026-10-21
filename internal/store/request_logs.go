@@ -861,10 +861,12 @@ func nullIntPtr(value sql.NullInt64) *int {
 	return &converted
 }
 
-// SummarizeModelCosts aggregates token usage per model per whole UTC hour for the
-// priced models, so the cost layer can bill peak/off-peak exactly. Service rows
-// without any usage arithmetic are billed by their recorded usage; rows with a
-// NULL prompt_tokens (failed before usage was known) contribute nothing.
+// SummarizeModelCosts aggregates token usage and consumed quota per model per
+// whole UTC hour. It covers every provider, not only the ones with an official
+// list price: subscription accounts still consume quota for unpriced models, and
+// the console reports that quota alongside tokens. Rows with a NULL
+// prompt_tokens (failed before usage was known) contribute no tokens but still
+// count their recorded credits.
 func (s *Store) SummarizeModelCosts(ctx context.Context, from, to time.Time) ([]accounts.CostUsageRow, error) {
 	if from.IsZero() {
 		from = time.Now().UTC().Add(-24 * time.Hour)
@@ -877,25 +879,10 @@ func (s *Store) SummarizeModelCosts(ctx context.Context, from, to time.Time) ([]
 	if !to.After(from) {
 		to = from.Add(time.Hour)
 	}
-	ids := accounts.PricedModelIDs()
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	// Arg order must match the SQL placeholder order: the two window bounds come
-	// first (top of the WHERE), then the four IN clauses (requested/mapped ×
-	// raw/normalized), each repeating the id list.
-	args := make([]any, 0, len(ids)*4+2)
-	args = append(args, from.Format("2006-01-02T15:04:05"), to.Format("2006-01-02T15:04:05"))
-	for clause := 0; clause < 4; clause++ {
-		for _, id := range ids {
-			args = append(args, id)
-		}
-	}
 
-	// The model match is normalized in SQL: lower-case, drop a provider prefix,
-	// drop a trailing -sg/_sg. That keeps WorkBuddy's "workbuddy/deepseek-v4.1-flash"
-	// and "-sg" aliases on the same price row without enumerating every variant.
-	inList := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	// The model id is normalized so WorkBuddy's "workbuddy/deepseek-v4.1-flash"
+	// and "-sg" aliases fold onto the same row; pricing then decides whether a
+	// row is billable at list price.
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   COALESCE(NULLIF(requested_model, ''), mapped_model, '') AS model_id,
@@ -903,16 +890,12 @@ SELECT
   COALESCE(SUM(CASE WHEN prompt_tokens IS NOT NULL OR completion_tokens IS NOT NULL THEN 1 ELSE 0 END), 0),
   COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0),
   COALESCE(SUM(CASE WHEN prompt_tokens IS NULL THEN 0 ELSE MAX(prompt_tokens - COALESCE(cache_read_tokens, 0), 0) END), 0),
-  COALESCE(SUM(COALESCE(completion_tokens, 0)), 0)
+  COALESCE(SUM(COALESCE(completion_tokens, 0)), 0),
+  COALESCE(SUM(COALESCE(credits, 0)), 0)
 FROM request_logs
 WHERE substr(created_at, 1, 19) >= ? AND substr(created_at, 1, 19) <= ?
-  AND (
-    lower(requested_model) IN (`+inList+`)
-    OR lower(mapped_model) IN (`+inList+`)
-    OR lower(replace(replace(replace(requested_model, '-sg', ''), '_sg', ''), 'workbuddy/', '')) IN (`+inList+`)
-    OR lower(replace(replace(replace(mapped_model, '-sg', ''), '_sg', ''), 'workbuddy/', '')) IN (`+inList+`)
-  )
-GROUP BY model_id, hour_key`, args...)
+  AND COALESCE(NULLIF(requested_model, ''), mapped_model, '') <> ''
+GROUP BY model_id, hour_key`, from.Format("2006-01-02T15:04:05"), to.Format("2006-01-02T15:04:05"))
 	if err != nil {
 		return nil, fmt.Errorf("summarize model costs: %w", err)
 	}
@@ -927,8 +910,9 @@ GROUP BY model_id, hour_key`, args...)
 			hit      int64
 			miss     int64
 			output   int64
+			credits  float64
 		)
-		if err := rows.Scan(&model, &hourKey, &requests, &hit, &miss, &output); err != nil {
+		if err := rows.Scan(&model, &hourKey, &requests, &hit, &miss, &output, &credits); err != nil {
 			return nil, fmt.Errorf("scan model cost row: %w", err)
 		}
 		hour, err := time.Parse("2006-01-02T15", hourKey)
@@ -940,6 +924,7 @@ GROUP BY model_id, hour_key`, args...)
 			HourStart: hour.UTC(),
 			Requests:  requests,
 			Usage:     accounts.TokenUsage{CacheHit: hit, CacheMiss: miss, Output: output},
+			Credits:   credits,
 		})
 	}
 	return out, rows.Err()

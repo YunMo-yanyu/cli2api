@@ -1,13 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { Card, Chip, Table } from '@heroui/react'
-import { ArrowClockwise, CurrencyCny, Coins, Stack } from '@phosphor-icons/react'
+import { ArrowClockwise, CurrencyCny, Coin, Coins, Stack } from '@phosphor-icons/react'
 import { fetchUsageCost, fetchUsagePricing, type CostBreakdown, type PricingCatalog } from '@/api/usage'
 import { EmptyPanel } from '@/components/ui/EmptyPanel'
 import { FilterToggle } from '@/components/ui/FilterToggle'
 import { PageAlert } from '@/components/ui/PageAlert'
 import { SkeletonBlock } from '@/components/ui/PageSkeletons'
 import { useI18n } from '@/hooks/useI18n'
-import { formatCNY, formatCompact, formatUnitPrice } from '@/lib/format'
+import { formatCNY, formatCompact, formatCredits, formatUnitPrice } from '@/lib/format'
 
 const CostChart = lazy(() => import('@/components/usage/CostChart').then((mod) => ({ default: mod.CostChart })))
 
@@ -21,6 +21,7 @@ const EMPTY_BREAKDOWN: CostBreakdown = {
     id: 'total', label: '', vendor: '', currency: 'CNY',
     requests: 0, cache_hit: 0, cache_miss: 0, output: 0, total_tokens: 0,
     cost: 0, cost_off_peak: 0, cost_peak: 0, peak_requests: 0,
+    credits: 0, priced: false,
   },
   series: [],
 }
@@ -71,6 +72,9 @@ export function UsagePage() {
   const hasData = totals.requests > 0 && data.models.length > 0
 
   const metrics = [
+    // Quota comes first: every provider consumes it, while the equivalent cost
+    // only exists for models with an official list price.
+    { label: t('usageCredits'), value: formatCredits(totals.credits), detail: t('usageCreditsHint'), icon: Coin },
     { label: t('usageEstCost'), value: formatCNY(totals.cost), detail: `${formatCNY(totals.cost_peak)} ${t('usagePeak')} · ${formatCNY(totals.cost_off_peak)} ${t('usageOffPeak')}`, icon: CurrencyCny },
     { label: t('usageTotalTokens'), value: formatCompact(totals.total_tokens), detail: `${formatCompact(totals.cache_hit)} / ${formatCompact(totals.cache_miss)} / ${formatCompact(totals.output)}  ${t('usageTokenSplitNote')}`, icon: Stack },
     { label: t('usageRequests'), value: String(totals.requests), detail: `${totals.peak_requests} ${t('usagePeak')} · ${totals.requests - totals.peak_requests} ${t('usageOffPeak')}`, icon: Coins },
@@ -179,6 +183,7 @@ export function UsagePage() {
                   <Table.Column>{t('usageColTokens')}</Table.Column>
                   <Table.Column>{t('usageColSplit')}</Table.Column>
                   <Table.Column>{t('usageColCost')}</Table.Column>
+                  <Table.Column>{t('usageColCredits')}</Table.Column>
                 </Table.Header>
                 <Table.Body>
                   {data.models.map((model) => (
@@ -195,7 +200,12 @@ export function UsagePage() {
                       <Table.Cell>
                         <span className="mono text-xs text-muted">{formatCNY(model.cost_peak)} / {formatCNY(model.cost_off_peak)}</span>
                       </Table.Cell>
-                      <Table.Cell><span className="mono text-sm font-semibold">{formatCNY(model.cost)}</span></Table.Cell>
+                      <Table.Cell>
+                        <span className="mono text-sm font-semibold">
+                          {model.priced ? formatCNY(model.cost) : <span className="text-muted">{t('usageUnpricedCost')}</span>}
+                        </span>
+                      </Table.Cell>
+                      <Table.Cell><span className="mono text-xs">{formatCredits(model.credits)}</span></Table.Cell>
                     </Table.Row>
                   ))}
                   <Table.Row>
@@ -207,6 +217,7 @@ export function UsagePage() {
                     <Table.Cell><span className="mono text-xs font-semibold">{formatCompact(totals.total_tokens)}</span></Table.Cell>
                     <Table.Cell><span className="mono text-xs text-muted">{formatCNY(totals.cost_peak)} / {formatCNY(totals.cost_off_peak)}</span></Table.Cell>
                     <Table.Cell><span className="mono text-sm font-semibold">{formatCNY(totals.cost)}</span></Table.Cell>
+                    <Table.Cell><span className="mono text-xs font-semibold">{formatCredits(totals.credits)}</span></Table.Cell>
                   </Table.Row>
                 </Table.Body>
               </Table.Content>

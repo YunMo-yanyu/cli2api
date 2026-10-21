@@ -40,12 +40,15 @@ export type ModelCost = {
   cost_off_peak: number
   cost_peak: number
   peak_requests: number
+  credits: number
+  priced: boolean
 }
 
 export type CostSeriesPoint = {
   at: string
   per_model: Record<string, number>
   tokens: number
+  credits: number
 }
 
 export type CostBreakdown = {

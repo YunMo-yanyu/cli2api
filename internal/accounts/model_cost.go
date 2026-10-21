@@ -65,6 +65,13 @@ type ModelCost struct {
 	CostOffPeak  float64 `json:"cost_off_peak"`
 	CostPeak     float64 `json:"cost_peak"`
 	PeakRequests int64   `json:"peak_requests"`
+	// Credits is the subscription quota this model consumed, as recorded by the
+	// provider. It applies to every provider, priced or not, and is the honest
+	// cost unit for subscription accounts where no list price exists.
+	Credits float64 `json:"credits"`
+	// Priced reports whether an official list price backs the Cost fields.
+	// Unpriced models still contribute tokens and Credits.
+	Priced bool `json:"priced"`
 }
 
 // CostBreakdown is the whole DeepSeek cost panel payload.
@@ -82,6 +89,7 @@ type CostSeriesPoint struct {
 	At       time.Time          `json:"at"`
 	PerModel map[string]float64 `json:"per_model"`
 	Tokens   int64              `json:"tokens"`
+	Credits  float64            `json:"credits"`
 }
 
 // chinaLocation is UTC+8 with no DST — DeepSeek's published peak window is
@@ -219,6 +227,21 @@ type CostUsageRow struct {
 	HourStart time.Time // UTC, truncated to the hour
 	Requests  int64
 	Usage     TokenUsage
+	// Credits is the quota consumed in this bucket; it is provider-agnostic and
+	// survives models that have no official list price.
+	Credits float64
+}
+
+// accumulateUsage folds one bucket's tokens and quota into a target row. Cost is
+// added by the caller because only priced rows carry it.
+func accumulateUsage(target *ModelCost, row CostUsageRow, cost float64) {
+	target.Requests += row.Requests
+	target.CacheHit += row.Usage.CacheHit
+	target.CacheMiss += row.Usage.CacheMiss
+	target.Output += row.Usage.Output
+	target.TotalTokens += row.Usage.Total()
+	target.Credits += row.Credits
+	target.Cost += cost
 }
 
 // BuildCostBreakdown prices pre-aggregated usage rows into the console payload.
@@ -240,6 +263,7 @@ func BuildCostBreakdown(rows []CostUsageRow, from, to time.Time, daily bool) Cos
 		at       time.Time
 		perModel map[string]float64
 		tokens   int64
+		credits  float64
 	}
 	series := map[string]*seriesAcc{}
 	seriesOrder := make([]string, 0)
@@ -264,7 +288,10 @@ func BuildCostBreakdown(rows []CostUsageRow, from, to time.Time, daily bool) Cos
 			}
 		}
 		if !ok {
-			if row.Requests > 0 || row.Usage.Total() > 0 {
+			// No official list price, but the request still consumed quota and
+			// tokens. Keep the row so the usage table and credit totals stay
+			// complete; only the monetary columns stay zero.
+			if row.Requests > 0 || row.Usage.Total() > 0 || row.Credits > 0 {
 				key := strings.TrimSpace(row.Model)
 				if key == "" {
 					key = "(unknown)"
@@ -274,6 +301,30 @@ func BuildCostBreakdown(rows []CostUsageRow, from, to time.Time, daily bool) Cos
 					unpriced = append(unpriced, key)
 				}
 			}
+			mc := byModel[row.Model]
+			if mc == nil {
+				label := strings.TrimSpace(row.Model)
+				if label == "" {
+					label = "(unknown)"
+				}
+				mc = &ModelCost{ID: label, Label: label, Currency: ""}
+				byModel[row.Model] = mc
+			}
+			if !seen[row.Model] {
+				seen[row.Model] = true
+				order = append(order, row.Model)
+			}
+			accumulateUsage(mc, row, 0)
+			accumulateUsage(&total, row, 0)
+			key, at := bucketKey(row.HourStart)
+			acc := series[key]
+			if acc == nil {
+				acc = &seriesAcc{at: at, perModel: map[string]float64{}}
+				series[key] = acc
+				seriesOrder = append(seriesOrder, key)
+			}
+			acc.tokens += row.Usage.Total()
+			acc.credits += row.Credits
 			continue
 		}
 		mc := byModel[price.ID]
@@ -288,12 +339,8 @@ func BuildCostBreakdown(rows []CostUsageRow, from, to time.Time, daily bool) Cos
 		peak := price.isPeakHour(row.HourStart)
 		cost := price.Cost(row.Usage, peak)
 
-		mc.Requests += row.Requests
-		mc.CacheHit += row.Usage.CacheHit
-		mc.CacheMiss += row.Usage.CacheMiss
-		mc.Output += row.Usage.Output
-		mc.TotalTokens += row.Usage.Total()
-		mc.Cost += cost
+		mc.Priced = true
+		accumulateUsage(mc, row, cost)
 		if peak {
 			mc.CostPeak += cost
 			mc.PeakRequests += row.Requests
@@ -301,12 +348,7 @@ func BuildCostBreakdown(rows []CostUsageRow, from, to time.Time, daily bool) Cos
 			mc.CostOffPeak += cost
 		}
 
-		total.Requests += row.Requests
-		total.CacheHit += row.Usage.CacheHit
-		total.CacheMiss += row.Usage.CacheMiss
-		total.Output += row.Usage.Output
-		total.TotalTokens += row.Usage.Total()
-		total.Cost += cost
+		accumulateUsage(&total, row, cost)
 		if peak {
 			total.CostPeak += cost
 			total.PeakRequests += row.Requests
@@ -323,6 +365,7 @@ func BuildCostBreakdown(rows []CostUsageRow, from, to time.Time, daily bool) Cos
 		}
 		acc.perModel[price.ID] += cost
 		acc.tokens += row.Usage.Total()
+		acc.credits += row.Credits
 	}
 
 	sort.Slice(order, func(i, j int) bool { return byModel[order[i]].Cost > byModel[order[j]].Cost })
@@ -335,7 +378,7 @@ func BuildCostBreakdown(rows []CostUsageRow, from, to time.Time, daily bool) Cos
 	points := make([]CostSeriesPoint, 0, len(seriesOrder))
 	for _, key := range seriesOrder {
 		acc := series[key]
-		points = append(points, CostSeriesPoint{At: acc.at, PerModel: acc.perModel, Tokens: acc.tokens})
+		points = append(points, CostSeriesPoint{At: acc.at, PerModel: acc.perModel, Tokens: acc.tokens, Credits: acc.credits})
 	}
 
 	sort.Strings(unpriced)
