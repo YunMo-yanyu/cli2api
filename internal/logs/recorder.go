@@ -30,6 +30,7 @@ type RequestQuery interface {
 	ListRequestLogs(ctx context.Context, filter accounts.RequestLogFilter) (accounts.RequestLogList, error)
 	GetRequestLog(ctx context.Context, id string) (accounts.RequestLog, error)
 	SummarizeRequestLogs(ctx context.Context, from, to time.Time) (accounts.RequestStats, error)
+	SummarizeModelCosts(ctx context.Context, from, to time.Time) ([]accounts.CostUsageRow, error)
 }
 
 // RequestStore is the union the SQLite store already implements. It keeps
@@ -251,6 +252,22 @@ func (r *RequestRecorder) StatsCacheSize() int {
 	r.statsCacheMu.Lock()
 	defer r.statsCacheMu.Unlock()
 	return len(r.statsCache)
+}
+
+// CostBreakdown prices the DeepSeek usage in the window against the official
+// list prices. It is computed live (not cached) because the panel is opened on
+// demand and the hourly aggregate is cheap.
+func (r *RequestRecorder) CostBreakdown(ctx context.Context, from, to time.Time) (accounts.CostBreakdown, error) {
+	store := r.Store()
+	if store == nil {
+		return accounts.CostBreakdown{}, fmt.Errorf("request logs unavailable")
+	}
+	rows, err := store.SummarizeModelCosts(ctx, from, to)
+	if err != nil {
+		return accounts.CostBreakdown{}, err
+	}
+	span := to.Sub(from)
+	return accounts.BuildCostBreakdown(rows, from, to, span > 48*time.Hour), nil
 }
 
 func logf(format string, args ...any) {
