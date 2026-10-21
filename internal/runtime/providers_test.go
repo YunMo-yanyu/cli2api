@@ -107,6 +107,7 @@ func TestManagerRefreshUsesInProcessProber(t *testing.T) {
 	registry.Register(providers.Adapter{ID: "workbuddy", Prober: prober})
 
 	manager := accountruntime.NewManager(accountruntime.ManagerConfig{DataDir: t.TempDir()}, store, &fakeStarter{})
+	defer manager.Close()
 	manager.SetProviders(registry)
 	manager.Pool().Upsert(executor.Item{ID: account.ID, Provider: "workbuddy", Runtime: "in_process"})
 
@@ -191,6 +192,7 @@ func TestManagerRefreshPersistsQuotaWindows(t *testing.T) {
 	registry := providers.NewRegistry()
 	registry.Register(providers.Adapter{ID: "devin", Prober: prober})
 	manager := accountruntime.NewManager(accountruntime.ManagerConfig{DataDir: t.TempDir()}, store, &fakeStarter{})
+	defer manager.Close()
 	manager.SetProviders(registry)
 	manager.Pool().Upsert(executor.Item{ID: account.ID, Provider: "devin", Runtime: "in_process"})
 	if err := manager.RefreshAll(ctx, false); err != nil {
@@ -254,6 +256,7 @@ func TestManagerRefreshClearsRecoveredDevinQuotaCooldown(t *testing.T) {
 	registry := providers.NewRegistry()
 	registry.Register(providers.Adapter{ID: "devin", Prober: prober})
 	manager := accountruntime.NewManager(accountruntime.ManagerConfig{DataDir: t.TempDir()}, store, &fakeStarter{})
+	defer manager.Close()
 	manager.SetProviders(registry)
 	manager.Pool().Upsert(executor.Item{ID: account.ID, Provider: "devin", Runtime: "in_process"})
 	manager.Pool().MarkClassified(account.ID, executor.Classified{
@@ -300,6 +303,7 @@ func TestManagerRefreshSkipsEmptyURLWithoutProber(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := accountruntime.NewManager(accountruntime.ManagerConfig{DataDir: t.TempDir()}, store, &fakeStarter{})
+	defer manager.Close()
 	manager.Pool().Upsert(executor.Item{ID: account.ID, Provider: "workbuddy", Runtime: "in_process"})
 	if err := manager.RefreshAll(ctx, false); err != nil {
 		t.Fatalf("refresh without prober must be a no-op, got %v", err)
@@ -346,6 +350,7 @@ func TestManagerRefreshUsesQoderAdapterCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := accountruntime.NewManager(accountruntime.ManagerConfig{DataDir: t.TempDir(), ProxyAPIKey: "proxy-key"}, store, &fakeStarter{})
+	defer manager.Close()
 	client := qoder.NewClient()
 	client.Bind(manager.AccountURL, manager.ProxyAPIKey)
 	registry := providers.NewRegistry()
@@ -376,6 +381,7 @@ func TestQoderAdapterRegistrationDoesNotProbeEmptyURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := accountruntime.NewManager(accountruntime.ManagerConfig{DataDir: t.TempDir()}, store, &fakeStarter{})
+	defer manager.Close()
 	client := qoder.NewClient()
 	client.Bind(manager.AccountURL, manager.ProxyAPIKey)
 	registry := providers.NewRegistry()
