@@ -6,12 +6,20 @@ import (
 	"time"
 
 	"github.com/caigee-cmd/cli2api/internal/accounts"
+	"github.com/caigee-cmd/cli2api/internal/logs"
 )
 
 // exportWindowHours is the widest range the cost panel can ask for. Request logs
-// are pruned after 7 days / 20k rows, so a longer window would silently return
-// partial data; 168h makes that ceiling explicit instead of misleading.
-const exportWindowHours = 24 * 7
+// are pruned on a schedule (CLI2API_LOG_RETENTION_DAYS, 7 days by default), so
+// the ceiling follows that setting instead of hardcoding a week — otherwise
+// raising retention would still leave the panel reporting a truncated window.
+func exportWindowHours() int {
+	days := logs.RetentionDays()
+	if days < 1 {
+		days = 1
+	}
+	return 24 * days
+}
 
 func (h *Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(r.URL.Path, "/")
@@ -57,12 +65,12 @@ func (h *Handler) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 	}
 	from := ParseQueryTime(r.URL.Query().Get("from"), false)
 	if from == nil {
-		earliest := to.Add(-exportWindowHours * time.Hour)
+		earliest := to.Add(-time.Duration(exportWindowHours()) * time.Hour)
 		from = &earliest
 	}
 	// Clamp to the retention ceiling so a wide custom range cannot imply
 	// full coverage of data the pruner already dropped.
-	if floor := to.Add(-exportWindowHours * time.Hour); from.Before(floor) {
+	if floor := to.Add(-time.Duration(exportWindowHours()) * time.Hour); from.Before(floor) {
 		from = &floor
 	}
 	if !to.After(*from) {
