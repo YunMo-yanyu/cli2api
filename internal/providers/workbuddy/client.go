@@ -526,7 +526,9 @@ func (c *Client) ChatStream(ctx context.Context, accountID string, req translate
 		return nil, providers.ResolvedChat{}, err
 	}
 	client.Timeout = 0
-	resp, err := client.Do(httpReq)
+	// Fail over fast when the upstream accepts the request but never sends a
+	// response head; see ttfb.go for why this must not cut a started stream.
+	resp, err := doWithFirstByteTimeout(client, httpReq, resolveFirstByteTimeout())
 	if err != nil {
 		return nil, providers.ResolvedChat{}, err
 	}
