@@ -35,6 +35,7 @@ function CostTooltip({
   daily,
   lang,
   models,
+  totalLabel,
 }: {
   active?: boolean
   payload?: Array<{ dataKey: string; value: number }>
@@ -42,6 +43,7 @@ function CostTooltip({
   daily: boolean
   lang: 'en' | 'zh'
   models: ModelCost[]
+  totalLabel: string
 }) {
   if (!active || !payload?.length) return null
   const labelById = new Map(models.map((model) => [model.id, model.label]))
@@ -61,7 +63,7 @@ function CostTooltip({
           </div>
         ))}
         <div className="flex items-center justify-between gap-6 border-t border-separator pt-1">
-          <span className="text-muted">合计</span>
+          <span className="text-muted">{totalLabel}</span>
           <span className="mono font-medium">{formatCNY(total)}</span>
         </div>
       </div>
@@ -74,11 +76,13 @@ export function CostChart({
   models,
   lang,
   emptyLabel,
+  totalLabel,
 }: {
   series: CostSeriesPoint[]
   models: ModelCost[]
   lang: 'en' | 'zh'
   emptyLabel: string
+  totalLabel: string
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const ordered = useMemo(() => models.map((model) => model.id), [models])
@@ -96,7 +100,8 @@ export function CostChart({
   useLayoutEffect(() => {
     const root = rootRef.current
     if (!root || !hasCost) return
-    const context = gsap.context(() => {
+    const media = gsap.matchMedia()
+    media.add('(prefers-reduced-motion: no-preference)', () => {
       const fills = gsap.utils.toArray<SVGPathElement>('.recharts-area-area', root)
       gsap.fromTo(fills, { autoAlpha: 0 }, {
         autoAlpha: 1,
@@ -105,7 +110,7 @@ export function CostChart({
         stagger: 0.05,
       })
     }, root)
-    return () => context.revert()
+    return () => media.revert()
   }, [hasCost, signature])
 
   if (!series.length || !hasCost) {
@@ -147,7 +152,7 @@ export function CostChart({
             />
             <Tooltip
               cursor={{ stroke: 'var(--border)', strokeDasharray: '3 3' }}
-              content={<CostTooltip daily={daily} lang={lang} models={models} />}
+              content={<CostTooltip daily={daily} lang={lang} models={models} totalLabel={totalLabel} />}
             />
             {ordered.map((id, index) => (
               <Area

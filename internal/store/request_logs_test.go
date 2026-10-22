@@ -513,3 +513,56 @@ func TestSummarizeModelCostsAggregatesPricedModels(t *testing.T) {
 		t.Fatalf("peak/off = %v/%v, want %v/%v", m.CostPeak, m.CostOffPeak, wantPeak, wantOff)
 	}
 }
+
+func TestSummarizeModelCostsUsesServedModel(t *testing.T) {
+	cases := []struct {
+		name, requested, mapped, want string
+		priced                        bool
+	}{
+		{"alias to priced model", "my-model", "workbuddy/deepseek-v4.1-flash-sg", "deepseek-v4.1-flash", true},
+		{"priced alias to unpriced model", "deepseek-v4.1-flash", "glm-5.3-flash", "glm-5.3-flash", false},
+		{"old log without mapping", "deepseek-v4.1-flash", "", "deepseek-v4.1-flash", true},
+		{"blank mapping", "deepseek-v4.1-flash", "  ", "deepseek-v4.1-flash", true},
+		{"mapping without requested model", "", "deepseek-v4.1-flash", "deepseek-v4.1-flash", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := OpenStore(filepath.Join(t.TempDir(), "qoder.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			at := time.Date(2026, 10, 12, 20, 15, 0, 0, time.UTC)
+			prompt, output := 1_000_000, 1_000_000
+			credits := 2.5
+			if err := store.InsertRequestLog(ctx, accounts.RequestLog{
+				ID: "mapped-usage", CreatedAt: at, Status: accounts.RequestStatusOK,
+				RequestedModel: tc.requested, MappedModel: tc.mapped,
+				PromptTokens: &prompt, CompletionTokens: &output, Credits: &credits,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			from, to := at.Add(-time.Hour), at.Add(time.Hour)
+			rows, err := store.SummarizeModelCosts(ctx, from, to)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := accounts.BuildCostBreakdown(rows, from, to, false)
+			if len(got.Models) != 1 {
+				t.Fatalf("models = %+v, want one served model", got.Models)
+			}
+			model := got.Models[0]
+			if model.ID != tc.want || model.Priced != tc.priced {
+				t.Fatalf("model = %q priced=%v, want %q priced=%v", model.ID, model.Priced, tc.want, tc.priced)
+			}
+			wantCost := 0.0
+			if tc.priced {
+				wantCost = 5.0
+			}
+			if math.Abs(model.Cost-wantCost) > 1e-9 || model.TotalTokens != 2_000_000 || model.Requests != 1 || model.Credits != credits {
+				t.Fatalf("wrong served-model usage: %+v", model)
+			}
+		})
+	}
+}

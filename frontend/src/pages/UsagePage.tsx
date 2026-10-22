@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
-import { Card, Chip, Table } from '@heroui/react'
+import { Button, Card, Chip, Table } from '@heroui/react'
 import { ArrowClockwise, CurrencyCny, Coin, Coins, Stack } from '@phosphor-icons/react'
 import { fetchUsageCost, fetchUsagePricing, type CostBreakdown, type PricingCatalog } from '@/api/usage'
 import { EmptyPanel } from '@/components/ui/EmptyPanel'
@@ -99,13 +99,14 @@ export function UsagePage() {
               { id: 'all', label: t('usageWindowTotal') },
             ]}
           />
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-2 text-xs font-medium text-muted transition-colors hover:text-foreground"
+          <Button
+            size="sm"
+            variant="secondary"
+            onPress={() => void load()}
+            isDisabled={loading}
           >
             <ArrowClockwise size={14} />{t('refresh')}
-          </button>
+          </Button>
         </div>
       </section>
 
@@ -149,7 +150,7 @@ export function UsagePage() {
             <div className="grid h-72 place-items-center"><SkeletonBlock className="h-56 w-full" /></div>
           ) : hasData ? (
             <Suspense fallback={<div className="grid h-72 place-items-center"><SkeletonBlock className="h-56 w-full" /></div>}>
-              <CostChart series={data.series} models={data.models} lang={lang} emptyLabel={t('usageChartEmpty')} />
+              <CostChart series={data.series} models={data.models} lang={lang} emptyLabel={t('usageChartEmpty')} totalLabel={t('usageTotals')} />
             </Suspense>
           ) : (
             <EmptyPanel icon={<CurrencyCny size={22} />} title={t('usageEmpty')} hint={t('usageRetentionHint')} />

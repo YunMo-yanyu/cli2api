@@ -880,12 +880,12 @@ func (s *Store) SummarizeModelCosts(ctx context.Context, from, to time.Time) ([]
 		to = from.Add(time.Hour)
 	}
 
-	// The model id is normalized so WorkBuddy's "workbuddy/deepseek-v4.1-flash"
-	// and "-sg" aliases fold onto the same row; pricing then decides whether a
-	// row is billable at list price.
+	// Prefer the model actually served over the public requested alias. Older
+	// logs without a mapped model fall back to the requested name. Pricing
+	// normalizes provider prefixes and regional suffixes after aggregation.
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
-  COALESCE(NULLIF(requested_model, ''), mapped_model, '') AS model_id,
+  COALESCE(NULLIF(TRIM(mapped_model), ''), NULLIF(TRIM(requested_model), ''), '') AS model_id,
   substr(created_at, 1, 13) AS hour_key,
   COALESCE(SUM(CASE WHEN prompt_tokens IS NOT NULL OR completion_tokens IS NOT NULL THEN 1 ELSE 0 END), 0),
   COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0),
@@ -894,7 +894,7 @@ SELECT
   COALESCE(SUM(COALESCE(credits, 0)), 0)
 FROM request_logs
 WHERE substr(created_at, 1, 19) >= ? AND substr(created_at, 1, 19) <= ?
-  AND COALESCE(NULLIF(requested_model, ''), mapped_model, '') <> ''
+  AND COALESCE(NULLIF(TRIM(mapped_model), ''), NULLIF(TRIM(requested_model), ''), '') <> ''
 GROUP BY model_id, hour_key`, from.Format("2006-01-02T15:04:05"), to.Format("2006-01-02T15:04:05"))
 	if err != nil {
 		return nil, fmt.Errorf("summarize model costs: %w", err)

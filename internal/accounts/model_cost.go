@@ -98,8 +98,9 @@ var chinaLocation = time.FixedZone("CST", 8*60*60)
 
 // deepSeekPrices returns the DeepSeek official list prices in CNY per 1M tokens.
 // Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing (fetched
-// 2026-10-16). Peak = Beijing time Mon–Fri (excl. CN public holidays)
-// 09:00–12:00 and 14:00–18:00; off-peak is exactly half price. The midday
+// 2026-10-16). The estimate uses Beijing time Mon–Fri
+// 09:00–12:00 and 14:00–18:00; holidays and adjusted working days are not
+// modeled. Off-peak is exactly half price. The midday
 // break makes the peak window non-contiguous, so we honor the two segments in
 // isPeakHour instead of a single [start,end) pair.
 func deepSeekPrices() []ModelPrice {
@@ -110,7 +111,7 @@ func deepSeekPrices() []ModelPrice {
 			OffPeak:       ModelPriceBand{CacheHit: 0.02, CacheMiss: 1, Output: 4},
 			Peak:          ModelPriceBand{CacheHit: 0.04, CacheMiss: 2, Output: 8},
 			PeakStartHour: 9, PeakEndHour: 18, PeakWeekdaysOnly: true, Source: src,
-			PeakNote: "北京时间工作日 09:00-12:00、14:00-18:00 为高峰价，其余为闲时价（闲时=高峰一半）",
+			PeakNote: "按北京时间周一至周五 09:00-12:00、14:00-18:00 估算高峰价；未处理节假日及调休",
 		},
 		{
 			ID: "deepseek-v4-flash", Label: "DeepSeek V4.1 Flash（旧名）", Vendor: "DeepSeek", Currency: "CNY",
@@ -124,7 +125,7 @@ func deepSeekPrices() []ModelPrice {
 			OffPeak:       ModelPriceBand{CacheHit: 0.15, CacheMiss: 4.5, Output: 13.5},
 			Peak:          ModelPriceBand{CacheHit: 0.30, CacheMiss: 9.0, Output: 27.0},
 			PeakStartHour: 9, PeakEndHour: 18, PeakWeekdaysOnly: true, Source: src,
-			PeakNote: "北京时间工作日 09:00-12:00、14:00-18:00 为高峰价",
+			PeakNote: "按北京时间周一至周五 09:00-12:00、14:00-18:00 估算高峰价；未处理节假日及调休",
 		},
 	}
 }
