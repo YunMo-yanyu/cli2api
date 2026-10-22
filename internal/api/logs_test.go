@@ -265,8 +265,10 @@ func TestUsageCostEndpointPricesDeepSeek(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
-	// Noon UTC on a Monday is 20:00 Beijing => off-peak.
-	at := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	// Keep the fixture inside retention even when the asynchronous pruner runs.
+	// Noon UTC is 20:00 Beijing and always off-peak.
+	yesterday := time.Now().UTC().Add(-24 * time.Hour)
+	at := time.Date(yesterday.Year(), yesterday.Month(), yesterday.Day(), 12, 0, 0, 0, time.UTC)
 	prompt, completion, cacheRead := 1_000_000, 1_000_000, 500_000
 	if err := srv.Recorder.Store().InsertRequestLog(ctx, accounts.RequestLog{
 		ID: accounts.NewRequestID(), CreatedAt: at, Status: accounts.RequestStatusOK,
@@ -276,7 +278,9 @@ func TestUsageCostEndpointPricesDeepSeek(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/usage/cost?from=2026-10-12T00:00:00Z&to=2026-10-13T00:00:00Z", nil)
+	from := at.Truncate(24 * time.Hour)
+	to := from.Add(24 * time.Hour)
+	req := httptest.NewRequest(http.MethodGet, "/api/usage/cost?from="+from.Format(time.RFC3339)+"&to="+to.Format(time.RFC3339), nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
