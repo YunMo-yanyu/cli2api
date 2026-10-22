@@ -873,7 +873,9 @@ func TestQuotaAbsentFieldsError(t *testing.T) {
 func TestProbeReportsCredentialReadiness(t *testing.T) {
 	payload, _ := readyCredential().Encode()
 	store := &memStore{region: "global", items: map[string][]byte{"acc1": payload}}
-	client := NewClient(store)
+	// Incomplete credentials trigger identity discovery. Keep that fallback on
+	// the local server instead of sending the fixture token to a live gateway.
+	client := newTestClient(t, store, http.NotFoundHandler())
 	health, err := client.Probe(context.Background(), "acc1")
 	if err != nil {
 		t.Fatal(err)
